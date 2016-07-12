@@ -16,11 +16,13 @@ KEY_PAIR = "loads"
 INSTANCE_TYPE = "t2.micro"
 INSTANCE_NAME = "amo2kinto-lambda-zip-builder"
 INSTANCE_PROJECT = "amo2kinto-lambda"
+INSTANCE_ARN = 'arn:aws:iam::927034868273:instance-profile/tarekLambda'
 
 
 @contextlib.contextmanager
 def aws_instance(region, ami_id, key_pair, instance_type,
-                 instance_name, instance_project):
+                 instance_name, instance_project,
+                 instance_profile_arn):
     # 1. Connect on the AWS region
     print("Connecting to %s" % region)
     conn = connect_to_region(region, is_secure=True)
@@ -30,7 +32,8 @@ def aws_instance(region, ami_id, key_pair, instance_type,
     reservations = conn.run_instances(ami_id,
                                     min_count=1, max_count=1,
                                     key_name=key_pair,
-                                    instance_type=instance_type)
+                                    instance_type=instance_type,
+                                    instance_profile_arn=instance_profile_arn)
 
     instance = reservations.instances[0]
 
@@ -79,9 +82,9 @@ def ssh_session(ip, key_filename):
     connected = False
     while not connected:
         try:
-            client.connect(instance.ip_address,
+            client.connect(ip,
                         username="ec2-user",
-                        key_filename=os.path.expanduser("~/.ssh/loads.pem"))
+                        key_filename=key_filename)
         except NoValidConnectionsError:
             print("\rSSH connection not yet available", end="")
             sys.stdout.flush()
@@ -100,12 +103,15 @@ def ssh_session(ip, key_filename):
 
 
 def create_zip(git_repo, project_root, zip_filename, ssh_key,
-               aws_region=AWS_REGION, ami_id=AMI_ID, key_pair=KEY_PAIR,
+               s3_bucket, aws_region=AWS_REGION, ami_id=AMI_ID,
+               key_pair=KEY_PAIR,
                instance_type=INSTANCE_TYPE, instance_name=INSTANCE_NAME,
-               instance_project=INSTANCE_PROJECT):
+               instance_project=INSTANCE_PROJECT,
+               instance_profile_arn=INSTANCE_ARN):
 
     with aws_instance(aws_region, ami_id, key_pair, instance_type,
-                      instance_name, instance_project) as instance:
+                      instance_name, instance_project,
+                      instance_profile_arn) as instance:
         with ssh_session(instance.ip_address, ssh_key) as client:
 
             print("Installing Rust")
@@ -115,15 +121,16 @@ def create_zip(git_repo, project_root, zip_filename, ssh_key,
             client.execute('sudo yum install -y git gcc openssl-devel')
 
             print("Cloning git repository...")
-            client.execute('git clone %s' % GIT_REPO)
+            client.execute('git clone %s' % git_repo)
 
             print("Creating the zip file...")
-            client.execute('cd %s; make zip' % PROJECT_ROOT)
+            client.execute('cd %s; make zip' % project_root)
 
-            print("Downloading the zip file...")
-            sftp_client = SFTPClient.from_transport(client.get_transport())
-            try:
-                sftp_client.get("%s/%s" % (PROJECT_ROOT, ZIP_FILENAME), ZIP_FILENAME)
-            finally:
-                sftp_client.close()
-            return ZIP_FILENAME
+            print("Uploading the zip file to S3...")
+            client.execute('cd %s; aws s3 cp %s s3://%s/%s --acl public-read' % (project_root,
+                zip_filename, s3_bucket, zip_filename))
+
+            print("File URL: https://%s.s3.amazonaws.com/%s" % (
+                    s3_bucket, zip_filename)))
+
+            return zip_filename
