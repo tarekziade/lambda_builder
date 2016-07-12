@@ -2,6 +2,7 @@ import time
 import os
 import sys
 import contextlib
+import json
 
 from boto.ec2 import connect_to_region
 from paramiko.client import SSHClient, AutoAddPolicy
@@ -23,11 +24,11 @@ INSTANCE_ARN = 'arn:aws:iam::927034868273:instance-profile/tarekLambda'
 def aws_instance(region, ami_id, key_pair, instance_type,
                  instance_name, instance_project,
                  instance_profile_arn):
-    # 1. Connect on the AWS region
+    # Connect to the AWS region
     print("Connecting to %s" % region)
     conn = connect_to_region(region, is_secure=True)
 
-    # 2. Create a Amazon Lambda AMI EC2 instance
+    # Create a Amazon Lambda AMI EC2 instance
     print("Starting an new instance of %s" % ami_id)
     reservations = conn.run_instances(ami_id,
                                     min_count=1, max_count=1,
@@ -37,14 +38,14 @@ def aws_instance(region, ami_id, key_pair, instance_type,
 
     instance = reservations.instances[0]
 
-    # 3. Tag the instance
+    # Tag the instance
     conn.create_tags([instance.id], {
         "Name": instance_name,
         "Projects": instance_project,
     })
     print("Instance Name:", instance_name)
 
-    # 4. Wait for running
+    # Wait for the instance to be ready
     while instance.state != "running":
         print("\rInstance state: %s" % instance.state, end="")
         sys.stdout.flush()
@@ -113,7 +114,6 @@ def create_zip(git_repo, project_root, zip_filename, ssh_key,
                       instance_name, instance_project,
                       instance_profile_arn) as instance:
         with ssh_session(instance.ip_address, ssh_key) as client:
-
             print("Installing Rust")
             client.execute('curl -sSf https://static.rust-lang.org/rustup.sh | sh')
 
@@ -135,11 +135,20 @@ def create_zip(git_repo, project_root, zip_filename, ssh_key,
 
             print("Updating the Lambda function")
             cmd = ("aws lambda update-function-code --s3-bucket %s --s3-key %s "
-                   "--function-name tarekPoll")
+                   "--function-name tarekPoll --region us-west-2")
             client.execute(cmd % (s3_bucket, zip_filename))
 
             print("Run it!")
-            cmd = "aws lambda invoke --function-name tarekPoll output.txt"
+
+            # XXX put in an option
+            payload = {"s3_bucket": "firefoxpoll",
+                       "s3_filename": "updates.json",
+                       "kinto_url":
+                       "https://firefox.settings.services.mozilla.com/v1/buckets/monitor/collections/changes/records"}
+
+            cmd = ("aws lambda invoke --function-name tarekPoll "
+                   "--region us-west-2 --payload '%s' output.txt" %
+                   json.dumps(payload))
             client.execute(cmd)
             client.execute("cat output.txt")
 
