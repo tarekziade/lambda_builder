@@ -131,6 +131,16 @@ def create_zip(git_repo, project_root, zip_filename, ssh_key,
                 zip_filename, s3_bucket, zip_filename))
 
             print("File URL: https://%s.s3.amazonaws.com/%s" % (
-                    s3_bucket, zip_filename)))
+                    s3_bucket, zip_filename))
+
+            print("Updating the Lambda function")
+            cmd = ("aws lambda update-function-code --s3-bucket %s --s3-key %s "
+                   "--function-name tarekPoll")
+            client.execute(cmd % (s3_bucket, zip_filename))
+
+            print("Run it!")
+            cmd = "aws lambda invoke --function-name tarekPoll output.txt"
+            client.execute(cmd)
+            client.execute("cat output.txt")
 
             return zip_filename
